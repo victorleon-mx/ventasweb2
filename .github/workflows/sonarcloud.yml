@@ -2,15 +2,22 @@ name: SonarCloud Scan
 
 on:
   push:
-    branches: [ "master", "main" ]
+    branches: [ "main", "master" ]
   pull_request:
-    branches: [ "master", "main" ]
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
 
 jobs:
   sonar:
+    name: Analyze with SonarCloud
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -18,15 +25,51 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '7.4'
+          extensions: mbstring, xml, bcmath, json, pdo_mysql
+          tools: composer:v2
 
-      - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
 
-      - name: Run tests
-        run: vendor/bin/phpunit --configuration phpunit.xml || true
+      - name: Cache composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-
+
+      - name: Install dependencies (composer)
+        run: composer install --no-progress --no-suggest --prefer-dist --no-interaction
+
+      - name: Prepare environment (.env)
+        if: always()
+        run: |
+          if [ -f .env.example ]; then
+            cp .env.example .env
+            php -r "file_exists('.env') || exit(0);"
+          fi
+
+      - name: Generate APP_KEY (if needed)
+        if: always()
+        run: |
+          php -r "require 'vendor/autoload.php';"
+          php artisan key:generate || true
+
+      - name: Run Unit Tests
+        run: |
+          if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
+            ./vendor/bin/phpunit --configuration phpunit.xml || true
+          else
+            echo "No phpunit config found, skipping tests."
+          fi
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
+
+      - name: Upload coverage (optional)
+        if: always()
+        run: echo "If you generate coverage (e.g. phpunit --coverage-clover=coverage.xml), configure sonar.php.coverage.reportPaths in SonarCloud settings."
